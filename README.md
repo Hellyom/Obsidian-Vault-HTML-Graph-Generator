@@ -19,6 +19,8 @@ The Obsidian-Vault-HTML-Graph-Generator is a tool designed to transform your Obs
 
 ### For Non-Tech Savvy Users
 
+Note: The antivirus **will** throw a check for the executable file, I don't have any way of avoiding this **AND** making it easier for non tech savvy people. Sorry.
+
 1. **Download and Run**: Download the provided [executable file](https://github.com/Hellyom/Obsidian-Vault-HTML-Graph-Generator/blob/main/Obsidian-Vault-HTML-Graph-Generator.exe) and run it. Follow the on-screen instructions to select your Obsidian vault and output directory.
 
 ### For Python Users
