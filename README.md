@@ -40,7 +40,7 @@ We welcome contributions from the community. Feel free to submit pull requests o
 
 If you find this tool useful and would like to support its development, consider supporting the project [here](https://buymeacoffee.com/oscarch).
 
-## Notes for Developers
+## Notes
 
 - **Code Quality**: "Yes, it's messy. Yes, it's only one file, but I was in a hurry. There's a better way to structure this, but who cares, right?"
-- **Future Plans**: Currently, there are no plans to make this an Obsidian plugin until the tool feels complete.
+- **Future Plans**: Currently, there are no plans to make this an Obsidian plugin, I'm pretty sure something like this has been already developed as a plugin. 
