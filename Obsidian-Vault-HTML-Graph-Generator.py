@@ -10,43 +10,100 @@ from tkinter import filedialog, messagebox
 vault_dir = None
 output_dir = None
 
+# Distinct color for folder nodes
+FOLDER_COLOR = "#6b5b95"
+
 def parse_vault(vault_dir):
-    notes = {}
-    links = defaultdict(list)
+    """Parse vault to extract files, folders, and wikilinks between files."""
+    files = {}  # Key: file_id (filename lowercase, e.g., "note.md")
+    links = defaultdict(list)  # Key: source file_id, Value: list of target link strings
+    folders = {}  # Key: folder_id (relative path from vault root, e.g., "Projects/Work")
     
-    for root, _, files in os.walk(vault_dir):
-        for file in files:
+    for root, dirs, files_in_dir in os.walk(vault_dir):
+        # Process current directory as a folder node
+        if root == vault_dir:
+            folder_id = "Vault Root"
+        else:
+            folder_id = os.path.relpath(root, vault_dir)
+        
+        # Add folder to tracking dict if not already present
+        if folder_id not in folders:
+            parent_folder_id = None
+            if root != vault_dir:
+                parent_abs = os.path.dirname(root)
+                parent_folder_id = "Vault Root" if parent_abs == vault_dir else os.path.relpath(parent_abs, vault_dir)
+            
+            folders[folder_id] = {
+                "abs_path": root,
+                "parent_folder_id": parent_folder_id,
+                "name": os.path.basename(root) if root != vault_dir else "Vault Root"
+            }
+        
+        # Process all .md files in this directory
+        for file in files_in_dir:
             if file.endswith('.md'):
                 file_path = os.path.join(root, file)
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                     html_content = markdown.markdown(content)
-                    notes[file.lower()] = {"content": content, "html": html_content}
+                    file_id = file.lower()  # Existing behavior: key by filename lowercase
+                    files[file_id] = {
+                        "content": content,
+                        "html": html_content,
+                        "parent_folder_id": folder_id,
+                        "abs_path": file_path
+                    }
+                
+                # Extract wikilinks, markdown links, and embeds
+                link_patterns = [
+                    r'\[\[(.*?)\]\]',          # Wikilinks
+                    r'\[([^\]]+)\]\(([^)]+)\)', # Markdown links
+                    r'!\[\[(.*?)\]\]'           # Embeds
+                ]
+                for pattern in link_patterns:
+                    for match in re.finditer(pattern, content):
+                        link = match.group(1)
+                        link = link.split('|')[0]  # Remove display text
+                        link = link.split('#')[0]   # Remove heading links
+                        link = link.strip().lower()
+                        links[file_id].append(link)
+    
+    return files, links, folders
 
-                    link_patterns = [
-                        r'\[\[(.*?)\]\]',
-                        r'\[([^\]]+)\]\(([^)]+)\)',
-                        r'!\[\[(.*?)\]\]'
-                    ]
-
-                    for pattern in link_patterns:
-                        for match in re.finditer(pattern, content):
-                            link = match.group(1)
-                            link = link.split('|')[0]
-                            link = link.split('#')[0]
-                            link = link.strip().lower()
-                            links[file.lower()].append(link)
-
-    return notes, links
-
-def generate_graph_data(notes, links, color_groups):
+def generate_graph_data(files, links, folders, color_groups):
+    """Generate nodes and edges including folder nodes and file-folder connections."""
     def capitalize_first_letter(s):
         return s[0].upper() + s[1:] if s else s
-
-    nodes = [{"id": note, "label": capitalize_first_letter(os.path.splitext(note)[0]), "content": notes[note]["content"]} for note in notes.keys()]
+    
+    nodes = []
     edges = []
-
     node_link_count = defaultdict(int)
+    
+    # 1. Create file nodes (existing behavior + type metadata)
+    for file_id, file_info in files.items():
+        label = capitalize_first_letter(os.path.splitext(file_id)[0])
+        node = {
+            "id": file_id,
+            "label": label,
+            "content": file_info["content"],
+            "type": "file",
+            "parent_folder_id": file_info["parent_folder_id"]
+        }
+        nodes.append(node)
+    
+    # 2. Create folder nodes
+    for folder_id, folder_info in folders.items():
+        node = {
+            "id": folder_id,
+            "label": folder_info["name"],
+            "type": "folder",
+            "color": FOLDER_COLOR,
+            "parent_folder_id": folder_info["parent_folder_id"]
+        }
+        nodes.append(node)
+    
+    # 3. Create all edges
+    # A. Existing file-to-file wikilinks
     for src, dst_list in links.items():
         node_link_count[src] += len(dst_list)
         for dst in dst_list:
@@ -55,34 +112,58 @@ def generate_graph_data(notes, links, color_groups):
                 dst + '.md',
                 os.path.splitext(dst)[0] + '.md'
             ]
-            matched = False
             for target in potential_targets:
-                if target in notes:
+                if target in files:
                     edges.append({"source": src, "target": target})
                     node_link_count[target] += 1
-                    matched = True
                     break
-
+    
+    # B. File-to-parent-folder edges (subfiles connected to their folder node)
+    for file_id, file_info in files.items():
+        parent_folder_id = file_info["parent_folder_id"]
+        edges.append({"source": file_id, "target": parent_folder_id})
+        node_link_count[file_id] += 1
+        node_link_count[parent_folder_id] += 1
+    
+    # C. Folder-to-parent-folder edges (hierarchy representation)
+    for folder_id, folder_info in folders.items():
+        parent_folder_id = folder_info["parent_folder_id"]
+        if parent_folder_id:
+            edges.append({"source": folder_id, "target": parent_folder_id})
+            node_link_count[folder_id] += 1
+            node_link_count[parent_folder_id] += 1
+    
+    # Assign link counts to all nodes
     for node in nodes:
-        node['link_count'] = node_link_count[node['id']]
-        node['color'] = get_node_color(node, color_groups)
-
+        node['link_count'] = node_link_count.get(node['id'], 0)
+    
+    # Assign colors (files use Obsidian color groups, folders use fixed color)
     for node in nodes:
-        del node['content']
-
+        if node['type'] == 'file':
+            node['color'] = get_node_color(node, color_groups)
+        else:
+            node['color'] = FOLDER_COLOR
+    
+    # Remove content from nodes to reduce HTML payload size
+    for node in nodes:
+        if 'content' in node:
+            del node['content']
+    
     return nodes, edges
 
 def get_node_color(node, color_groups):
-    content = node['content']
+    """Get node color from Obsidian's graph color groups (files only)."""
+    content = node.get('content', '')
     for group in color_groups:
         if group['query'] and re.search(group['query'], content, re.IGNORECASE):
             return group['color']
-    return "#7f7f7f"
+    return "#7f7f7f"  # Default gray for unmatched files
 
 def rgb_to_hex(rgb):
     return f"#{rgb:06x}"
 
 def get_obsidian_colors(vault_dir):
+    """Load color groups from Obsidian's graph.json config."""
     graph_config_path = os.path.join(vault_dir, '.obsidian', 'graph.json')
     try:
         with open(graph_config_path, 'r') as f:
@@ -95,16 +176,18 @@ def get_obsidian_colors(vault_dir):
         return []
 
 def create_html_file(nodes, edges, color_groups, output_dir):
+    """Generate interactive HTML graph with D3.js, styling folder nodes differently."""
     html_content = """
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8">
         <style>
-            body { margin: 0; padding: 0; overflow: hidden; background-color: #1e1e1e; }
+            body { margin:0; padding:0; overflow: hidden; background-color: #1e1e1e; }
             .node { cursor: move; }
             .link { stroke: #999; stroke-opacity: 0.6; }
             text { font-family: Arial, sans-serif; font-size: 12px; pointer-events: none; fill: #fff; }
+            .folder-label { font-size: 14px; font-weight: bold; }
             svg { width: 100vw; height: 100vh; }
         </style>
     </head>
@@ -174,10 +257,11 @@ def create_html_file(nodes, edges, color_groups, output_dir):
                 .selectAll("circle")
                 .data(nodes)
                 .enter().append("circle")
-                .attr("class", "node")
+                .attr("class", d => "node " + d.type)
                 .attr("r", function(d) {
-                    var radius = 5 + Math.sqrt(d.link_count);
-                    return radius;
+                    // Folders are larger than files
+                    var base = d.type === 'folder' ? 8 : 5;
+                    return base + Math.sqrt(d.link_count);
                 })
                 .attr("fill", function(d) {
                     return d.color;
@@ -194,6 +278,7 @@ def create_html_file(nodes, edges, color_groups, output_dir):
                 .enter().append("text")
                 .attr("x", 8)
                 .attr("y", ".31em")
+                .attr("class", d => d.type === 'folder' ? "folder-label" : "")
                 .text(d => d.label);
 
             function ticked() {
@@ -278,9 +363,9 @@ def create_html():
         return
 
     try:
-        notes, links = parse_vault(vault_dir)
+        files, links, folders = parse_vault(vault_dir)
         color_groups = get_obsidian_colors(vault_dir)
-        nodes, edges = generate_graph_data(notes, links, color_groups)
+        nodes, edges = generate_graph_data(files, links, folders, color_groups)
         output_file = create_html_file(nodes, edges, color_groups, output_dir)
         messagebox.showinfo("Success", f"HTML file created: {output_file}")
     except Exception as e:
@@ -304,7 +389,7 @@ def open_support_link():
 
 # GUI Setup
 root = tk.Tk()
-root.title("Obsidian Vault Graph Generator")
+root.title("Obsidian Vault Graph Generator (Folder-Aware)")
 root.geometry("300x250")
 root.resizable(False, False)
 
